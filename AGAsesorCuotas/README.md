@@ -1,7 +1,7 @@
-# AG Asesor — Envío de cuotas
+# AG Asesor — Envío de correos a clientes
 
-Aplicación de escritorio (Windows) para preparar y enviar correos de cuotas mensuales a clientes
-desde Outlook clásico, con la cuenta de Outlook que se elija en la pestaña Configuración
+Aplicación de escritorio (Windows) para enviar correos personalizados a clientes a partir de
+plantillas (cuotas mensuales, recordatorios, avisos…) desde Outlook clásico, con la cuenta de Outlook que se elija en la pestaña Configuración
 (por ejemplo `joaquin@agasesor.com`).
 
 Interfaz HTML local + backend Python/Flask servido con waitress en `127.0.0.1`, historial en SQLite
@@ -12,14 +12,14 @@ y empaquetado con PyInstaller mediante GitHub Actions.
 ```text
 AGAsesorCuotas/
 ├── app.py                 # Arranque, servidor local, API y coordinación del envío
-├── core.py                # Validación, importes en céntimos, periodos y plantilla del correo
-├── database.py            # SQLite: tandas, destinatarios, historial, duplicados, recuperación
+├── core.py                # Validación, importes en céntimos, periodos y plantillas (campos {…})
+├── database.py            # SQLite: plantillas, clientes, tandas, historial, duplicados, recuperación
 ├── mailer.py              # Interfaz común de envío
 ├── outlook_sender.py      # Envío real con Outlook clásico (pywin32/COM, solo Windows)
 ├── mock_sender.py         # Envío SIMULADO para desarrollo y pruebas
 ├── templates/index.html
 ├── static/styles.css, app.js
-├── tests/                 # pytest (validación, plantilla, duplicados, seguridad)
+├── tests/                 # pytest (validación, plantillas, clientes, duplicados, seguridad, migración)
 ├── AGAsesorCuotas.spec    # Configuración de PyInstaller (--onedir)
 ├── build.bat              # Compilación local en Windows
 └── .github/workflows/build-windows.yml
@@ -62,14 +62,33 @@ Se distribuye la **carpeta completa** `AGAsesorCuotas\` (no solo el `.exe`). El 
 
 0. La primera vez, la aplicación abre la pestaña **Configuración**: elegir la cuenta de envío
    entre las cuentas configuradas en Outlook clásico y pulsar «Usar esta cuenta».
-1. Elegir mes y año.
-2. Añadir clientes (Intro en el importe de la última fila crea otra fila). «Cargar última tanda»
-   reutiliza los clientes del último envío. La tabla se guarda como borrador en el navegador.
-3. «Revisar y enviar…»: si hay errores se marcan en rojo y no se puede continuar.
-4. En la confirmación se ve el resumen, un ejemplo del correo y los avisos de duplicados.
+1. **Plantillas** → «Crear plantilla»: nombre, asunto y cuerpo. Los campos se escriben entre llaves:
+   - `{nombre}` (nombre del cliente) y `{periodo}` (p. ej. «octubre de 2026») se rellenan solos.
+   - `{importe}` se escribe en cada envío, se valida como importe (`1.234,56`) y se suma en el total.
+   - Cualquier otro (`{fecha_limite}`, `{documento}`…) añade una columna que se rellena en cada envío.
+   La vista previa muestra cómo quedará el correo. Hay una plantilla inicial, «Cuota mensual».
+2. **Enviar**: elegir plantilla y periodo.
+3. Marcar con la casilla los clientes a los que se envía y rellenar sus campos. «+ Añadir cliente»
+   guarda un cliente nuevo (solo nombre y correo; queda marcado). Los clientes se pueden editar (✎)
+   y eliminar (✕); el historial de envíos se conserva.
+4. «Revisar y enviar…»: los datos que falten se marcan en rojo y no se puede continuar.
+5. En la confirmación se ve el resumen, un ejemplo del correo y los avisos de duplicados.
    Hay que marcar «He comprobado…» para enviar.
-5. Se envía un correo individual por cliente y se muestra el progreso y el resultado de cada uno.
-6. En «Historial» se consultan todos los intentos y se resuelven los «No confirmado».
+6. Se envía un correo individual por cliente y se muestra el progreso y el resultado de cada uno.
+7. En «Historial» se consultan todos los intentos (con la plantilla usada) y se resuelven los
+   «No confirmado».
+
+La selección y los valores escritos se guardan como borrador en el navegador hasta que se envían.
+
+### Qué se guarda
+
+- **Clientes**: nombre y correo (el correo no se puede repetir). Los importes y demás campos no se
+  guardan en la ficha del cliente; solo quedan en el historial del envío en el que se usaron.
+- **Plantillas**: al eliminar una plantilla deja de aparecer, pero el historial conserva su nombre.
+- Cada tanda guarda una **copia de la plantilla** tal y como se confirmó: editar la plantilla después
+  no cambia lo que se está enviando. Si se edita entre la revisión y el envío, se pide revisar de nuevo.
+- Al actualizar desde la versión 1.0, los destinatarios del historial se convierten en clientes y la
+  plantilla de cuotas pasa a llamarse «Cuota mensual», manteniendo el control de duplicados.
 
 ## Estados y prevención de duplicados
 
@@ -80,7 +99,8 @@ Se distribuye la **carpeta completa** `AGAsesorCuotas\` (no solo el `.exe`). El 
 | Error                  | Fallo confirmado **antes** de entregar el mensaje a Outlook       | Sí                                        |
 | No confirmado          | Fallo durante la entrega o cierre inesperado: pudo haberse enviado | No, hasta revisarlo en el Historial      |
 
-- Clave lógica: correo normalizado (minúsculas) + periodo (`AAAA-MM`) + tipo de comunicación (`cuota`).
+- Clave lógica: correo normalizado (minúsculas) + periodo (`AAAA-MM`) + plantilla. La misma plantilla
+  no se envía dos veces al mismo cliente en el mismo periodo sin confirmarlo; otra plantilla sí.
 - La comprobación se repite dentro de la transacción que crea la tanda; solo puede haber una tanda
   enviándose a la vez.
 - Cada destinatario se guarda como «En proceso» **antes** de llamar a Outlook. Si la aplicación se

@@ -1,7 +1,7 @@
 import pytest
 
 from core import (Period, ValidationError, format_amount, normalize_email, parse_amount,
-                  parse_period, validate_clients)
+                  parse_period, validate_fields)
 
 
 @pytest.mark.parametrize("raw, cents", [
@@ -58,24 +58,20 @@ def test_period():
             parse_period(*bad)
 
 
-def test_validate_clients_mixed():
-    rows = [
-        {"name": "  Ana   López ", "email": "ana@ejemplo.com", "amount": "45,50"},
-        {"name": "", "email": "mal", "amount": "-1"},
-        {"name": "Ana bis", "email": "ANA@ejemplo.com", "amount": "10"},
-        "no es un dict",
-    ]
-    clients, errors = validate_clients(rows)
-    assert [c.name for c in clients] == ["Ana López"]
-    assert set(errors[1]) == {"name", "email", "amount"}
-    assert "repetido" in errors[2]["email"]
-    assert 3 in errors
+def test_validate_fields():
+    values, amount, errors = validate_fields(
+        ["importe", "fecha_limite"], {"importe": "1.234,5", "fecha_limite": "  15 de   mayo "})
+    assert errors == {}
+    assert amount == 123450
+    assert values == {"importe": "1.234,50", "fecha_limite": "15 de mayo"}
 
 
-def test_validate_clients_empty_and_control_chars():
-    with pytest.raises(ValidationError):
-        validate_clients([])
-    with pytest.raises(ValidationError):
-        validate_clients("x")
-    _, errors = validate_clients([{"name": "Ana‮", "email": "a@b.es", "amount": "1"}])
-    assert "name" in errors[0]
+def test_validate_fields_errors():
+    _, amount, errors = validate_fields(["importe", "nota"], {"importe": "-1", "nota": "  "})
+    assert amount is None and set(errors) == {"importe", "nota"}
+    _, _, errors = validate_fields(["nota"], "no es un dict")
+    assert "nota" in errors
+    _, _, errors = validate_fields(["nota"], {"nota": "texto\u202e"})
+    assert "nota" in errors
+    # Sin campos no hay nada que validar.
+    assert validate_fields([], None) == ({}, None, {})

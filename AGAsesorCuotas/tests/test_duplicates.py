@@ -8,7 +8,7 @@ BEN = {"name": "Benito", "email": "benito@ejemplo.com", "amount": "20"}
 
 
 def send(client, clients, month=10, year=2026, **extra):
-    return client.post_json("/api/send", {"month": month, "year": year, "clients": clients, "confirm": True, **extra})
+    return client.send(clients, month=month, year=year, **extra)
 
 
 def statuses(client, batch_id):
@@ -20,11 +20,11 @@ def test_second_send_same_period_is_blocked(client, mailer):
     assert r.status_code == 202
     assert statuses(client, r.get_json()["batch_id"]) == ["accepted", "accepted"]
 
-    prev = client.post_json("/api/preview", {"month": 10, "year": 2026, "clients": [ANA]}).get_json()
+    prev = client.preview([ANA]).get_json()
     assert prev["conflicts"][0]["status"] == "accepted"
     assert prev["conflicts"][0]["resendable"] is True
 
-    r2 = send(client, [{**ANA, "email": "ANA@Ejemplo.com"}])
+    r2 = send(client, [ANA])
     assert r2.status_code == 409
     assert len(mailer.sent) == 2
 
@@ -43,13 +43,13 @@ def test_explicit_resend(client, mailer):
 
 
 def test_requires_confirmation(client, mailer):
-    r = client.post_json("/api/send", {"month": 10, "year": 2026, "clients": [ANA]})
+    r = client.send([ANA], confirm=False)
     assert r.status_code == 400
     assert mailer.sent == []
 
 
 def test_invalid_rows_block_send(client, mailer):
-    r = send(client, [ANA, {"name": "X", "email": "mal", "amount": "1"}])
+    r = send(client, [ANA, {"name": "X", "email": "x@ejemplo.com", "amount": "1,234"}])
     assert r.status_code == 400
     assert mailer.sent == []
 

@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="csrf-token" content="{{ csrf_token }}">
-  <title>AG Asesor · Cuotas</title>
+  <title>AG Asesor · Correos</title>
   <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
 </head>
 <body data-simulation="{{ 'true' if simulation else 'false' }}">
@@ -18,7 +18,7 @@
     <div class="brand">
       <span class="logo" aria-hidden="true">AG</span>
       <div>
-        <h1>Envío de cuotas</h1>
+        <h1>Envío de correos a clientes</h1>
         <p class="muted">AG Asesor · remitente <span id="header-sender">{{ sender or "sin seleccionar" }}</span></p>
       </div>
     </div>
@@ -30,7 +30,8 @@
   </header>
 
   <nav class="tabs" role="tablist">
-    <button type="button" role="tab" class="tab active" data-tab="batch" aria-selected="true">Nueva tanda</button>
+    <button type="button" role="tab" class="tab active" data-tab="batch" aria-selected="true">Enviar</button>
+    <button type="button" role="tab" class="tab" data-tab="templates" aria-selected="false">Plantillas</button>
     <button type="button" role="tab" class="tab" data-tab="history" aria-selected="false">
       Historial <span class="badge warn" id="uncertain-badge" hidden></span>
     </button>
@@ -38,11 +39,14 @@
   </nav>
 
   <main>
-    <!-- ================= NUEVA TANDA ================= -->
+    <!-- ================= ENVIAR ================= -->
     <section id="tab-batch" class="tab-panel">
       <div class="card period-card">
-        <h2>Periodo de la cuota</h2>
+        <h2>Correo a enviar</h2>
         <div class="period-fields">
+          <label>Plantilla
+            <select id="tpl-select"><option>Cargando…</option></select>
+          </label>
           <label>Mes
             <select id="month">
               {% for m in months %}
@@ -53,46 +57,124 @@
           <label>Año
             <input id="year" type="number" min="2000" max="2100" step="1" value="{{ year }}">
           </label>
-          <p class="period-preview">Asunto: <strong id="subject-preview"></strong></p>
+          <button type="button" class="btn-link" id="btn-goto-templates">Crear o editar plantillas</button>
         </div>
+        <p class="period-preview">Asunto: <strong id="subject-preview"></strong></p>
+        <p class="muted small">El periodo rellena el campo {periodo} y sirve para avisar si ya se envió
+          esta plantilla al mismo cliente en ese periodo.</p>
       </div>
 
       <div class="card">
         <div class="card-head">
-          <h2>Clientes</h2>
+          <h2>Clientes <span class="muted small" id="clients-count"></span></h2>
           <div class="actions">
-            <button type="button" class="btn" id="btn-load-last">Cargar última tanda</button>
-            <button type="button" class="btn" id="btn-clear">Vaciar tabla</button>
+            <input type="search" id="client-search" placeholder="Buscar cliente…" aria-label="Buscar cliente">
+            <button type="button" class="btn" id="btn-add">+ Añadir cliente</button>
           </div>
         </div>
 
+        <form class="client-form" id="client-form" hidden novalidate>
+          <h3 id="client-form-title">Nuevo cliente</h3>
+          <div class="client-form-fields">
+            <label>Nombre del cliente
+              <input type="text" id="cf-name" maxlength="200" autocomplete="off">
+            </label>
+            <label>Correo electrónico
+              <input type="email" id="cf-email" maxlength="254" autocomplete="off">
+            </label>
+            <button type="submit" class="btn btn-primary" id="cf-save">Guardar cliente</button>
+            <button type="button" class="btn" id="cf-cancel">Cancelar</button>
+          </div>
+          <p class="error-text" id="cf-error" hidden></p>
+          <p class="muted small">Se guardan solo el nombre y el correo. Los demás datos (importe, etc.)
+            se escriben en cada envío.</p>
+        </form>
+
         <div class="table-wrap">
           <table class="clients" id="clients-table">
-            <thead>
-              <tr>
-                <th class="col-num">#</th>
-                <th>Nombre del cliente</th>
-                <th>Correo electrónico</th>
-                <th class="col-amount">Importe (€)</th>
-                <th class="col-del"><span class="sr-only">Eliminar</span></th>
-              </tr>
-            </thead>
+            <thead><tr id="clients-head"></tr></thead>
             <tbody id="clients-body"></tbody>
           </table>
         </div>
-        <p class="empty" id="empty-msg">Todavía no hay clientes. Pulse «Añadir cliente».</p>
-        <button type="button" class="btn btn-add" id="btn-add">+ Añadir cliente</button>
+        <p class="empty" id="empty-msg" hidden>Todavía no hay clientes guardados. Pulse «Añadir cliente».</p>
+        <p class="empty" id="no-match-msg" hidden>Ningún cliente coincide con la búsqueda.</p>
       </div>
 
       <div class="card summary" id="summary">
-        <div class="stat"><span class="label">Clientes</span><span class="value" id="sum-rows">0</span></div>
-        <div class="stat"><span class="label">Válidos</span><span class="value" id="sum-valid">0</span></div>
-        <div class="stat"><span class="label">Con errores</span><span class="value" id="sum-errors">0</span></div>
+        <div class="stat"><span class="label">Seleccionados</span><span class="value" id="sum-rows">0</span></div>
+        <div class="stat"><span class="label">Con datos pendientes</span><span class="value" id="sum-errors">0</span></div>
         <div class="stat"><span class="label">Periodo</span><span class="value" id="sum-period">—</span></div>
-        <div class="stat total"><span class="label">Importe total</span><span class="value" id="sum-total">0,00 €</span></div>
+        <div class="stat total" id="sum-total-box"><span class="label">Importe total</span><span class="value" id="sum-total">0,00 €</span></div>
         <button type="button" class="btn btn-primary" id="btn-review" disabled>Revisar y enviar…</button>
       </div>
       <p class="hint" id="review-hint"></p>
+    </section>
+
+    <!-- ================= PLANTILLAS ================= -->
+    <section id="tab-templates" class="tab-panel" hidden>
+      <div class="card" id="tpl-list-card">
+        <div class="card-head">
+          <h2>Plantillas de correo</h2>
+          <div class="actions">
+            <button type="button" class="btn btn-primary" id="btn-tpl-new">+ Crear plantilla</button>
+          </div>
+        </div>
+        <div class="table-wrap">
+          <table class="history">
+            <thead><tr><th>Nombre</th><th>Asunto</th><th>Campos a rellenar al enviar</th><th class="col-actions"></th></tr></thead>
+            <tbody id="tpl-list"></tbody>
+          </table>
+        </div>
+        <p class="empty" id="tpl-empty" hidden>No hay plantillas. Pulse «Crear plantilla».</p>
+      </div>
+
+      <div class="card" id="tpl-editor" hidden>
+        <h2 id="tpl-editor-title">Nueva plantilla</h2>
+        <div class="tpl-grid">
+          <div class="tpl-form">
+            <label>Nombre de la plantilla
+              <input type="text" id="te-name" maxlength="100" autocomplete="off" placeholder="p. ej. Recordatorio de documentación">
+            </label>
+            <label>Asunto
+              <input type="text" id="te-subject" maxlength="255" autocomplete="off">
+            </label>
+            <label>Cuerpo del correo
+              <textarea id="te-body" rows="14" maxlength="20000"></textarea>
+            </label>
+            <div class="note">
+              <strong>Campos:</strong> escriba un nombre entre llaves y se sustituirá en cada correo.
+              <ul>
+                <li><code>{nombre}</code> y <code>{periodo}</code> se rellenan solos.</li>
+                <li><code>{importe}</code> se escribe al enviar, se comprueba que sea un importe válido y se suma en el total.</li>
+                <li>Cualquier otro, como <code>{fecha_limite}</code>, añade una columna que se rellena al enviar.</li>
+              </ul>
+              <div class="insert-row">
+                <span>Insertar:</span>
+                <button type="button" class="chip" data-insert="nombre">{nombre}</button>
+                <button type="button" class="chip" data-insert="periodo">{periodo}</button>
+                <button type="button" class="chip" data-insert="importe">{importe}</button>
+                <input type="text" id="te-new-field" maxlength="40" placeholder="otro_campo" aria-label="Nombre de un campo nuevo">
+                <button type="button" class="btn btn-small" id="te-insert-field">Insertar campo</button>
+              </div>
+            </div>
+          </div>
+          <div class="tpl-side">
+            <h3>Campos que se pedirán al enviar</h3>
+            <div class="chips" id="te-fields"></div>
+            <h3>Vista previa</h3>
+            <div class="mail-preview">
+              <div class="mail-head"><span class="label">Asunto:</span> <span id="te-prev-subject"></span></div>
+              <pre id="te-prev-body"></pre>
+            </div>
+            <p class="muted small">Ejemplo con «Ana López», el periodo seleccionado y valores de muestra.</p>
+          </div>
+        </div>
+        <p class="error-text" id="te-error" hidden></p>
+        <div class="dialog-actions">
+          <button type="button" class="btn" id="te-cancel">Cancelar</button>
+          <button type="button" class="btn btn-primary" id="te-save">Guardar plantilla</button>
+        </div>
+      </div>
     </section>
 
     <!-- ================= HISTORIAL ================= -->
@@ -128,7 +210,7 @@
           <table class="history">
             <thead>
               <tr>
-                <th>Fecha del intento</th><th>Periodo</th><th>Cliente</th><th>Correo</th>
+                <th>Fecha del intento</th><th>Plantilla</th><th>Periodo</th><th>Cliente</th><th>Correo</th>
                 <th class="col-amount">Importe</th><th>Estado</th><th>Detalle</th>
               </tr>
             </thead>
@@ -172,19 +254,20 @@
     <div class="dialog-body" id="confirm-step">
       <h2 id="confirm-title">Confirmar envío</h2>
       <div class="confirm-summary">
+        <div><span class="label">Plantilla</span><strong id="c-template"></strong></div>
         <div><span class="label">Periodo</span><strong id="c-period"></strong></div>
         <div><span class="label">Destinatarios</span><strong id="c-count"></strong></div>
-        <div><span class="label">Importe total</span><strong id="c-total"></strong></div>
+        <div id="c-total-box"><span class="label">Importe total</span><strong id="c-total"></strong></div>
         <div><span class="label">Remitente</span><strong id="c-sender"></strong></div>
       </div>
 
       <div class="alert danger" id="c-blocking" hidden>
         <strong>No se puede enviar.</strong> Estos destinatarios tienen un envío en curso o sin confirmar
-        para este periodo. Revíselos en el Historial o quítelos de la tabla:
+        de esta plantilla para este periodo. Revíselos en el Historial o quítelos de la selección:
         <ul id="c-blocking-list"></ul>
       </div>
       <div class="alert warn" id="c-resend" hidden>
-        <strong>Ya se envió la cuota de este periodo a:</strong>
+        <strong>Ya se envió esta plantilla en este periodo a:</strong>
         <ul id="c-resend-list"></ul>
         <label class="check"><input type="checkbox" id="c-resend-ack">
           Quiero volver a enviarles el correo de forma intencionada.</label>
@@ -193,7 +276,7 @@
       <details class="recipients-details">
         <summary>Ver la lista de destinatarios</summary>
         <div class="table-wrap small">
-          <table><thead><tr><th>Nombre</th><th>Correo</th><th class="col-amount">Importe</th></tr></thead>
+          <table><thead><tr><th>Nombre</th><th>Correo</th><th class="col-amount" id="c-amount-head">Importe</th></tr></thead>
             <tbody id="c-recipients"></tbody></table>
         </div>
       </details>
@@ -208,7 +291,7 @@
       </div>
 
       <label class="check confirm-check"><input type="checkbox" id="c-ack">
-        He comprobado que los destinatarios, el periodo y los importes son correctos.</label>
+        He comprobado que los destinatarios, el periodo y los datos de cada correo son correctos.</label>
       {% if simulation %}<p class="sim-inline">Modo simulado: no se enviará nada.</p>{% endif %}
       <p class="error-text" id="c-error" hidden></p>
 
@@ -234,16 +317,6 @@
       </div>
     </div>
   </dialog>
-
-  <template id="row-template">
-    <tr>
-      <td class="col-num"></td>
-      <td><input type="text" data-field="name" maxlength="200" autocomplete="off" aria-label="Nombre del cliente"><span class="field-error"></span></td>
-      <td><input type="email" data-field="email" maxlength="254" autocomplete="off" aria-label="Correo electrónico"><span class="field-error"></span></td>
-      <td class="col-amount"><input type="text" data-field="amount" inputmode="decimal" autocomplete="off" placeholder="0,00" aria-label="Importe"><span class="field-error"></span></td>
-      <td class="col-del"><button type="button" class="btn-icon" data-action="delete" title="Eliminar fila" aria-label="Eliminar fila">✕</button></td>
-    </tr>
-  </template>
 
   <script src="{{ url_for('static', filename='app.js') }}"></script>
 </body>

@@ -1,4 +1,4 @@
-"""Lógica de negocio: validación, importes, periodos y plantilla de correo.
+"""Lógica de negocio: validación, importes, periodos y plantillas de correo.
 
 No depende de Flask, de la base de datos ni de Outlook, para poder probarse
 en cualquier plataforma.
@@ -6,8 +6,11 @@ en cualquier plataforma.
 
 import re
 import unicodedata
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from typing import Optional
 
+# Tipo de comunicación de la plantilla de cuotas original. Se conserva para que
+# el control de duplicados siga reconociendo los envíos anteriores.
 COMM_TYPE_CUOTA = "cuota"
 
 MONTHS = [
@@ -22,6 +25,21 @@ MAX_EMAIL_LEN = 254
 MAX_CLIENTS = 1000
 # 10 millones de euros: límite de cordura para detectar errores de tecleo.
 MAX_AMOUNT_CENTS = 10_000_000_00
+
+MAX_TEMPLATE_NAME_LEN = 100
+MAX_SUBJECT_LEN = 255
+MAX_BODY_LEN = 20_000
+MAX_FIELDS = 15
+MAX_FIELD_NAME_LEN = 40
+MAX_FIELD_VALUE_LEN = 500
+
+# Campos que se rellenan solos: el nombre del cliente y el periodo de la tanda.
+BUILTIN_FIELDS = ("nombre", "periodo")
+# Campo con tratamiento especial: se valida como importe y se suma en el total.
+AMOUNT_FIELD = "importe"
+
+_LETTERS = "A-Za-zÁÉÍÓÚÜÑáéíóúüñ"
+PLACEHOLDER_RE = re.compile(r"\{([" + _LETTERS + "_][" + _LETTERS + r"0-9_]*)\}")
 
 EMAIL_RE = re.compile(
     r"^[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+"
@@ -60,9 +78,16 @@ class Period:
 
 @dataclass(frozen=True)
 class Client:
+    """Destinatario de una tanda con los valores de los campos de la plantilla.
+
+    fields contiene los valores ya formateados tal y como aparecerán en el
+    correo (p. ej. {"importe": "1.234,56", "fecha_limite": "15 de mayo"}).
+    """
     name: str
     email: str
-    amount_cents: int
+    amount_cents: Optional[int] = None
+    fields: dict = field(default_factory=dict)
+    client_id: Optional[int] = None
 
     @property
     def email_key(self) -> str:
@@ -151,44 +176,97 @@ def normalize_email(raw) -> str:
     return email
 
 
-def validate_clients(rows):
-    """Valida la lista de filas recibida.
+def _check_text(value, label, max_len, multiline=False):
+    if not isinstance(value, str):
+        raise ValidationError(f"{label} es obligatorio.")
+    value = value.replace("\r\n", "\n").replace("\r", "\n")
+    value = value.strip() if not multiline else value.strip("\n ")
+    if not value:
+        raise ValidationError(f"{label} es obligatorio.")
+    if len(value) > max_len:
+        raise ValidationError(f"{label} no puede superar {max_len} caracteres.")
+    allowed = ("\n", "\t") if multiline else ()
+    if any(unicodedata.category(c) in ("Cc", "Cf") and c not in allowed for c in value):
+        raise ValidationError(f"{label} contiene caracteres no permitidos.")
+    return value
 
-    Devuelve (clientes_validos, errores) donde errores es un dict
-    {indice_fila: {campo: mensaje}}. Solo hay clientes válidos utilizables si
-    errores está vacío.
+
+# --- Plantillas ------------------------------------------------------------
+
+def template_fields(subject: str, body: str) -> list:
+    """Campos que hay que rellenar al enviar, en orden de aparición.
+
+    Excluye los automáticos ({nombre}, {periodo}). Los nombres no distinguen
+    mayúsculas: {Importe} e {importe} son el mismo campo.
     """
-    if not isinstance(rows, list):
-        raise ValidationError("Lista de clientes no válida.")
-    if len(rows) > MAX_CLIENTS:
-        raise ValidationError(f"No se pueden enviar más de {MAX_CLIENTS} clientes en una tanda.")
+    out = []
+    for text in (subject, body):
+        for m in PLACEHOLDER_RE.finditer(text or ""):
+            name = m.group(1).lower()
+            if name not in BUILTIN_FIELDS and name not in out:
+                out.append(name)
+    return out
 
-    clients, errors, seen = [], {}, {}
-    for i, row in enumerate(rows):
-        row = row if isinstance(row, dict) else {}
-        row_errors, values = {}, {}
-        for field, fn in (("name", normalize_name), ("email", normalize_email), ("amount", parse_amount)):
+
+def field_label(name: str) -> str:
+    """'fecha_limite' -> 'Fecha limite'."""
+    text = name.replace("_", " ").strip()
+    return text[:1].upper() + text[1:]
+
+
+def validate_template(data) -> dict:
+    """Valida nombre, asunto y cuerpo de una plantilla. Devuelve los valores normalizados."""
+    if not isinstance(data, dict):
+        raise ValidationError("Datos de la plantilla no válidos.")
+    name = " ".join(_check_text(data.get("name"), "El nombre de la plantilla", MAX_TEMPLATE_NAME_LEN).split())
+    subject = _check_text(data.get("subject"), "El asunto", MAX_SUBJECT_LEN)
+    body = _check_text(data.get("body"), "El cuerpo del correo", MAX_BODY_LEN, multiline=True)
+    fields = template_fields(subject, body)
+    if len(fields) > MAX_FIELDS:
+        raise ValidationError(f"Una plantilla no puede tener más de {MAX_FIELDS} campos.")
+    too_long = [f for f in fields if len(f) > MAX_FIELD_NAME_LEN]
+    if too_long:
+        raise ValidationError(f"El nombre del campo {{{too_long[0]}}} es demasiado largo.")
+    return {"name": name, "subject": subject, "body": body}
+
+
+def validate_fields(fields, raw):
+    """Valida los valores escritos para los campos de la plantilla.
+
+    Devuelve (valores_formateados, importe_en_centimos_o_None, errores).
+    """
+    raw = raw if isinstance(raw, dict) else {}
+    values, errors, amount = {}, {}, None
+    for name in fields:
+        value = raw.get(name)
+        if name == AMOUNT_FIELD:
             try:
-                values[field] = fn(row.get(field))
+                amount = parse_amount(value)
+                values[name] = format_amount(amount)
             except ValidationError as e:
-                row_errors[field] = str(e)
-        if "email" in values:
-            key = email_key(values["email"])
-            if key in seen:
-                row_errors["email"] = f"Correo repetido (fila {seen[key] + 1})."
-            else:
-                seen[key] = i
-        if row_errors:
-            errors[i] = row_errors
-        else:
-            clients.append(Client(values["name"], values["email"], values["amount"]))
-    if not rows:
-        raise ValidationError("Añada al menos un cliente.")
-    return clients, errors
+                errors[name] = str(e)
+            continue
+        try:
+            values[name] = " ".join(_check_text(value, "Este campo", MAX_FIELD_VALUE_LEN).split())
+        except ValidationError as e:
+            errors[name] = str(e)
+    return values, amount, errors
 
 
-# --- Plantilla -------------------------------------------------------------
-# Se puede modificar libremente sin afectar al resto de la aplicación.
+def render_template(subject: str, body: str, values: dict):
+    """Devuelve (asunto, cuerpo) sustituyendo los campos por sus valores.
+
+    Los valores se insertan tal cual: si contienen llaves no se vuelven a
+    interpretar. Un campo sin valor se deja como está.
+    """
+    def sub(m):
+        return values.get(m.group(1).lower(), m.group(0))
+    return PLACEHOLDER_RE.sub(sub, subject), PLACEHOLDER_RE.sub(sub, body)
+
+
+# Plantilla inicial (la de cuotas). Se crea la primera vez que se abre la aplicación.
+
+DEFAULT_TEMPLATE_NAME = "Cuota mensual"
 
 SUBJECT_TEMPLATE = "Cuota correspondiente a {periodo}"
 
@@ -207,10 +285,6 @@ BODY_TEMPLATE = (
 
 
 def render_email(name: str, period: Period, amount_cents: int):
-    """Devuelve (asunto, cuerpo) para un único destinatario."""
-    values = {
-        "nombre": name,
-        "periodo": period.label,
-        "importe": format_amount(amount_cents),
-    }
-    return SUBJECT_TEMPLATE.format(**values), BODY_TEMPLATE.format(**values)
+    """Correo de la plantilla de cuotas inicial para un único destinatario."""
+    values = {"nombre": name, "periodo": period.label, "importe": format_amount(amount_cents)}
+    return render_template(SUBJECT_TEMPLATE, BODY_TEMPLATE, values)

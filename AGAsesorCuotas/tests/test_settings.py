@@ -1,5 +1,5 @@
 from app import create_app, load_config, save_config
-from conftest import TOKEN
+from conftest import TOKEN, add_helpers
 from mock_sender import MockMailer
 
 ANA = {"name": "Ana", "email": "ana@ejemplo.com", "amount": "10"}
@@ -9,13 +9,11 @@ def make_client(db, sender="", saved=None):
     mailer = MockMailer(sender, delay=0)
     app = create_app(mailer, db, synchronous=True, csrf_token=TOKEN,
                      save_sender=(saved.append if saved is not None else None))
-    c = app.test_client()
-    c.post_json = lambda url, json: c.post(url, json=json, headers={"X-CSRF-Token": TOKEN})
-    return c, mailer
+    return add_helpers(app.test_client()), mailer
 
 
 def send(c, clients=(ANA,)):
-    return c.post_json("/api/send", {"month": 10, "year": 2026, "clients": list(clients), "confirm": True})
+    return c.send(list(clients))
 
 
 def test_without_sender_nothing_is_sent(db):

@@ -1,6 +1,7 @@
 from conftest import TOKEN
 
-BODY = {"month": 10, "year": 2026, "clients": [{"name": "Ana", "email": "ana@ejemplo.com", "amount": "1"}]}
+BODY = {"month": 10, "year": 2026, "template_id": 1, "recipients": []}
+ANA = {"name": "Ana", "email": "ana@ejemplo.com", "amount": "1"}
 
 
 def test_post_without_token_rejected(client):
@@ -32,7 +33,13 @@ def test_index_embeds_token_and_headers(client):
 
 
 def test_preview_ok(client):
-    r = client.post_json("/api/preview", BODY)
-    d = r.get_json()
+    d = client.preview([ANA]).get_json()
     assert d["valid"] and d["summary"]["total"] == "1,00"
     assert d["sample"]["subject"] == "Cuota correspondiente a octubre de 2026"
+
+
+def test_put_and_delete_require_token(client):
+    cid = client.client_id(ANA)
+    assert client.put(f"/api/clients/{cid}", json=ANA).status_code == 403
+    assert client.delete(f"/api/clients/{cid}", json={}).status_code == 403
+    assert client.post("/api/templates", json={"name": "x", "subject": "x", "body": "x"}).status_code == 403

@@ -1,4 +1,4 @@
-"""AG Asesor — Envío de cuotas. Punto de entrada y backend local (Flask).
+"""AG Asesor — Envío de correos a clientes. Punto de entrada y backend local (Flask).
 
 Uso:
     python app.py              # Windows: Outlook real. Otros sistemas: simulado.
@@ -23,12 +23,12 @@ from pathlib import Path
 from flask import Flask, abort, jsonify, render_template, request
 
 import core
-from database import Database, DuplicateError
+from database import ConflictError, Database, DuplicateError, backup_file
 from mailer import MailerUnavailable, SendFailed, create_mailer
 
 APP_ID = "agasesor-cuotas"
-APP_NAME = "AG Asesor — Envío de cuotas"
-VERSION = "1.0.0"
+APP_NAME = "AG Asesor — Envío de correos"
+VERSION = "1.1.0"
 DEFAULT_PORT = 8765
 # "sender" vacío: la cuenta de envío se elige en la pestaña Configuración.
 DEFAULT_CONFIG = {"sender": "", "port": DEFAULT_PORT}
@@ -140,6 +140,14 @@ def create_app(mailer, db: Database, port=None, synchronous=False, csrf_token=No
     def http_error(e):
         return jsonify(error="Solicitud no permitida."), e.code
 
+    @app.errorhandler(ConflictError)
+    def conflict(e):
+        return jsonify(error=str(e)), 409
+
+    @app.errorhandler(core.ValidationError)
+    def invalid(e):
+        return jsonify(error=str(e)), 400
+
     @app.errorhandler(Exception)
     def unexpected(e):
         log.exception("Error no controlado")
@@ -207,15 +215,116 @@ def create_app(mailer, db: Database, port=None, synchronous=False, csrf_token=No
         finally:
             send_lock.release()
 
-    # --- Tanda ---------------------------------------------------------------
+    # --- Plantillas -----------------------------------------------------------
 
-    def parse_request():
+    def describe_template(t):
+        fields = core.template_fields(t["subject"], t["body"])
+        return {"id": t["id"], "name": t["name"], "subject": t["subject"], "body": t["body"],
+                "fields": [{"name": f, "label": core.field_label(f), "amount": f == core.AMOUNT_FIELD}
+                           for f in fields],
+                "updated_at": t["updated_at"]}
+
+    def json_body():
         data = request.get_json(silent=True)
         if not isinstance(data, dict):
             raise core.ValidationError("Datos no válidos.")
+        return data
+
+    @app.get("/api/templates")
+    def templates():
+        return jsonify(templates=[describe_template(t) for t in db.list_templates()],
+                       builtin=list(core.BUILTIN_FIELDS), amount_field=core.AMOUNT_FIELD)
+
+    @app.post("/api/templates")
+    def create_template():
+        t = core.validate_template(json_body())
+        tid = db.save_template(None, t["name"], t["subject"], t["body"])
+        log.info("Plantilla %s creada", tid)
+        return jsonify(template=describe_template(db.get_template(tid))), 201
+
+    @app.put("/api/templates/<int:template_id>")
+    def update_template(template_id):
+        t = core.validate_template(json_body())
+        db.save_template(template_id, t["name"], t["subject"], t["body"])
+        log.info("Plantilla %s modificada", template_id)
+        return jsonify(template=describe_template(db.get_template(template_id)))
+
+    @app.delete("/api/templates/<int:template_id>")
+    def delete_template(template_id):
+        if not db.delete_template(template_id):
+            return jsonify(error="La plantilla no existe o ya se había eliminado."), 404
+        log.info("Plantilla %s eliminada", template_id)
+        return jsonify(ok=True)
+
+    # --- Clientes -------------------------------------------------------------
+
+    def client_from_request():
+        data = json_body()
+        return core.normalize_name(data.get("name")), core.normalize_email(data.get("email"))
+
+    @app.get("/api/clients")
+    def clients():
+        return jsonify(clients=db.list_clients())
+
+    @app.post("/api/clients")
+    def create_client():
+        name, email = client_from_request()
+        cid = db.save_client(None, name, email)
+        return jsonify(client={"id": cid, "name": name, "email": email}), 201
+
+    @app.put("/api/clients/<int:client_id>")
+    def update_client(client_id):
+        name, email = client_from_request()
+        db.save_client(client_id, name, email)
+        return jsonify(client={"id": client_id, "name": name, "email": email})
+
+    @app.delete("/api/clients/<int:client_id>")
+    def delete_client(client_id):
+        if not db.delete_client(client_id):
+            return jsonify(error="El cliente no existe o ya se había eliminado."), 404
+        return jsonify(ok=True)
+
+    # --- Tanda ---------------------------------------------------------------
+
+    def parse_request():
+        """Valida la petición de vista previa o envío.
+
+        Los nombres y correos se toman de la lista de clientes guardada; de la
+        petición solo se usan los ids seleccionados y los valores de los campos.
+        Devuelve (datos, periodo, plantilla, destinatarios, errores) con
+        errores = {id_cliente: {campo: mensaje}}.
+        """
+        data = json_body()
         period = core.parse_period(data.get("month"), data.get("year"))
-        clients, errors = core.validate_clients(data.get("clients"))
-        return data, period, clients, errors
+        template = db.get_template(data.get("template_id")) if isinstance(data.get("template_id"), int) else None
+        if not template:
+            raise core.ValidationError("Elija una plantilla. La seleccionada no existe o se ha eliminado.")
+        items = data.get("recipients")
+        if not isinstance(items, list) or not items:
+            raise core.ValidationError("Seleccione al menos un cliente.")
+        if len(items) > core.MAX_CLIENTS:
+            raise core.ValidationError(f"No se pueden enviar más de {core.MAX_CLIENTS} correos en una tanda.")
+        ids = [it.get("client_id") if isinstance(it, dict) else None for it in items]
+        if not all(isinstance(i, int) and not isinstance(i, bool) for i in ids) or len(set(ids)) != len(ids):
+            raise core.ValidationError("Selección de clientes no válida.")
+
+        saved = db.get_clients(ids)
+        fields = core.template_fields(template["subject"], template["body"])
+        recipients, errors = [], {}
+        for cid, item in zip(ids, items):
+            client = saved.get(cid)
+            if not client:
+                errors[cid] = {"_": "Este cliente ya no existe. Actualice la lista."}
+                continue
+            values, amount, errs = core.validate_fields(fields, item.get("fields"))
+            if errs:
+                errors[cid] = errs
+            else:
+                recipients.append(core.Client(client["name"], client["email"], amount, values, cid))
+        return data, period, template, recipients, errors
+
+    def amount_text(cents):
+        return None if cents is None else core.format_amount(cents)
 
     def describe_conflicts(conflicts):
         out = []
@@ -223,49 +332,54 @@ def create_app(mailer, db: Database, port=None, synchronous=False, csrf_token=No
             out.append({
                 "email": c["email"], "name": c["name"], "status": c["status"],
                 "status_label": STATUS_LABELS[c["status"]], "attempted_at": c["attempted_at"],
-                "batch_id": c["batch_id"], "amount": core.format_amount(c["amount_cents"]),
+                "batch_id": c["batch_id"], "amount": amount_text(c["amount_cents"]),
                 "resendable": c["status"] == "accepted",
             })
         return out
 
+    def render_for(template, period, r):
+        values = {"nombre": r.name, "periodo": period.label, **r.fields}
+        return core.render_template(template["subject"], template["body"], values)
+
     @app.post("/api/preview")
     def preview():
-        try:
-            _, period, clients, errors = parse_request()
-        except core.ValidationError as e:
-            return jsonify(error=str(e)), 400
-        total = sum(c.amount_cents for c in clients)
+        _, period, template, recipients, errors = parse_request()
+        has_amount = core.AMOUNT_FIELD in core.template_fields(template["subject"], template["body"])
+        total = sum(r.amount_cents or 0 for r in recipients)
         resp = {
             "valid": not errors,
             "errors": {str(k): v for k, v in errors.items()},
             "summary": {
-                "rows": len(clients) + len(errors),
-                "valid_count": len(clients),
+                "rows": len(recipients) + len(errors),
+                "valid_count": len(recipients),
                 "error_count": len(errors),
-                "total": core.format_amount(total),
+                "has_amount": has_amount,
+                "total": core.format_amount(total) if has_amount else None,
                 "period_label": period.label,
                 "period_key": period.key,
+                "template_name": template["name"],
+                "template_updated_at": template["updated_at"],
             },
         }
         if not errors:
-            conflicts = db.find_conflicts(period.key, core.COMM_TYPE_CUOTA, [c.email_key for c in clients])
+            conflicts = db.find_conflicts(period.key, template["comm_type"], [r.email_key for r in recipients])
             resp["conflicts"] = describe_conflicts(conflicts)
-            resp["recipients"] = [{"name": c.name, "email": c.email, "amount": core.format_amount(c.amount_cents)}
-                                  for c in clients]
-            subject, body = core.render_email(clients[0].name, period, clients[0].amount_cents)
-            resp["sample"] = {"to": clients[0].email, "subject": subject, "body": body}
+            resp["recipients"] = [{"name": r.name, "email": r.email, "amount": amount_text(r.amount_cents)}
+                                  for r in recipients]
+            subject, body = render_for(template, period, recipients[0])
+            resp["sample"] = {"to": recipients[0].email, "subject": subject, "body": body}
         return jsonify(resp)
 
     @app.post("/api/send")
     def send():
-        try:
-            data, period, clients, errors = parse_request()
-        except core.ValidationError as e:
-            return jsonify(error=str(e)), 400
+        data, period, template, recipients, errors = parse_request()
         if errors:
-            return jsonify(error="Corrija los errores de la tabla antes de enviar."), 400
+            return jsonify(error="Corrija los errores de los clientes seleccionados antes de enviar."), 400
         if data.get("confirm") is not True:
             return jsonify(error="Falta la confirmación del envío."), 400
+        # La plantilla no puede haber cambiado desde la vista previa que se confirmó.
+        if data.get("template_updated_at") != template["updated_at"]:
+            return jsonify(error="La plantilla se ha modificado desde la revisión. Vuelva a revisar el envío."), 409
         resend_ack = data.get("resend_ack") or []
         if not isinstance(resend_ack, list) or not all(isinstance(x, str) for x in resend_ack):
             return jsonify(error="Datos no válidos."), 400
@@ -283,11 +397,12 @@ def create_app(mailer, db: Database, port=None, synchronous=False, csrf_token=No
             except MailerUnavailable as e:
                 return jsonify(error=str(e)), 503
             try:
-                batch_id = db.create_batch(period.key, core.COMM_TYPE_CUOTA, mailer.name, clients,
-                                           resend_ack, sender=sender)
+                batch_id = db.create_batch(period.key, template["comm_type"], mailer.name, recipients,
+                                           resend_ack, sender=sender, template=template)
             except DuplicateError as e:
                 return jsonify(error=str(e), conflicts=describe_conflicts(e.conflicts)), 409
-            log.info("Tanda %s creada: %s destinatarios, periodo %s", batch_id, len(clients), period.key)
+            log.info("Tanda %s creada: %s destinatarios, periodo %s, plantilla %s",
+                     batch_id, len(recipients), period.key, template["id"])
             # A partir de aquí run_batch se encarga de liberar el bloqueo.
             started = True
             if synchronous:
@@ -320,9 +435,11 @@ def create_app(mailer, db: Database, port=None, synchronous=False, csrf_token=No
 
     def _send_all(batch_id, session):
         for r in db.pending_recipients(batch_id):
-            # Se renderiza a partir de lo guardado: lo registrado es lo enviado.
+            # Se genera a partir de lo guardado (copia de la plantilla y valores):
+            # lo registrado es lo enviado.
             period = core.Period.from_key(r["period"])
-            subject, body = core.render_email(r["name"], period, r["amount_cents"])
+            values = {**json.loads(r["fields"] or "{}"), "nombre": r["name"], "periodo": period.label}
+            subject, body = core.render_template(r["subject_tpl"], r["body_tpl"], values)
             if not db.mark_sending(r["id"]):
                 continue
             try:
@@ -349,12 +466,13 @@ def create_app(mailer, db: Database, port=None, synchronous=False, csrf_token=No
         counts = {s: 0 for s in STATUS_LABELS}
         for r in b["recipients"]:
             counts[r["status"]] += 1
-            r["amount"] = core.format_amount(r.pop("amount_cents"))
+            r["amount"] = amount_text(r.pop("amount_cents"))
             r["status_label"] = STATUS_LABELS[r["status"]]
         return jsonify(
             id=b["id"], status=b["status"], period_label=core.Period.from_key(b["period"]).label,
             finished=b["status"] != "in_progress", counts=counts, total=len(b["recipients"]),
-            recipients=b["recipients"], mailer=b["mailer"], sender=b["sender"])
+            recipients=b["recipients"], mailer=b["mailer"], sender=b["sender"],
+            template_name=b["template_name"])
 
     # --- Historial ------------------------------------------------------------
 
@@ -371,7 +489,7 @@ def create_app(mailer, db: Database, port=None, synchronous=False, csrf_token=No
             return jsonify(error="Estado no válido."), 400
         rows = db.history(period_key, st)
         for r in rows:
-            r["amount"] = core.format_amount(r.pop("amount_cents"))
+            r["amount"] = amount_text(r.pop("amount_cents"))
             r["period_label"] = core.Period.from_key(r["period"]).label
             r["status_label"] = STATUS_LABELS[r["status"]]
         return jsonify(rows=rows)
@@ -384,12 +502,6 @@ def create_app(mailer, db: Database, port=None, synchronous=False, csrf_token=No
         if not db.resolve_uncertain(uid, data["sent"]):
             return jsonify(error="El registro no existe o ya no está pendiente de revisión."), 409
         return jsonify(ok=True)
-
-    @app.get("/api/last-clients")
-    def last_clients():
-        return jsonify(clients=[
-            {"name": c["name"], "email": c["email"], "amount": core.format_amount(c["amount_cents"])}
-            for c in db.last_batch_clients()])
 
     return app
 
@@ -448,14 +560,17 @@ def main(argv=None):
         sys.exit(1)
 
     # La simulación usa su propia base de datos para que nunca se mezcle con envíos reales.
-    db = Database(directory / ("app-simulado.db" if simulate else "app.db"))
+    db_path = directory / ("app-simulado.db" if simulate else "app.db")
+    # La copia se hace antes de abrir la base: así queda una previa a cualquier migración.
+    if db_path.exists():
+        try:
+            backup_file(db_path, directory / "copias")
+        except Exception:
+            log.exception("No se pudo crear la copia de seguridad")
+    db = Database(db_path)
     recovered = db.recover_interrupted()
     if recovered:
         log.warning("Se recuperaron %s destinatarios de una tanda interrumpida", recovered)
-    try:
-        db.backup(directory / "copias")
-    except Exception:
-        log.exception("No se pudo crear la copia de seguridad")
 
     mailer = create_mailer(simulate, cfg["sender"])
 

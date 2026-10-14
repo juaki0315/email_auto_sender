@@ -8,11 +8,14 @@ Estados de un destinatario:
   uncertain -> no se sabe si se envió; requiere revisión manual
 """
 
+import json
 import os
 import sqlite3
 import uuid
 from datetime import datetime
 from pathlib import Path
+
+import core
 
 STATUSES = ("pending", "sending", "accepted", "error", "uncertain")
 # Estados que impiden un nuevo envío al mismo destinatario y periodo.
@@ -22,15 +25,19 @@ RESENDABLE_STATUSES = ("accepted",)
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS batches (
-    id          INTEGER PRIMARY KEY AUTOINCREMENT,
-    uid         TEXT NOT NULL UNIQUE,
-    period      TEXT NOT NULL,
-    comm_type   TEXT NOT NULL,
-    mailer      TEXT NOT NULL,
-    sender      TEXT NOT NULL DEFAULT '',
-    status      TEXT NOT NULL CHECK (status IN ('in_progress', 'completed', 'completed_with_errors', 'interrupted')),
-    created_at  TEXT NOT NULL,
-    finished_at TEXT
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    uid           TEXT NOT NULL UNIQUE,
+    period        TEXT NOT NULL,
+    comm_type     TEXT NOT NULL,
+    mailer        TEXT NOT NULL,
+    sender        TEXT NOT NULL DEFAULT '',
+    template_id   INTEGER,
+    template_name TEXT NOT NULL DEFAULT '',
+    subject_tpl   TEXT NOT NULL DEFAULT '',
+    body_tpl      TEXT NOT NULL DEFAULT '',
+    status        TEXT NOT NULL CHECK (status IN ('in_progress', 'completed', 'completed_with_errors', 'interrupted')),
+    created_at    TEXT NOT NULL,
+    finished_at   TEXT
 );
 
 CREATE TABLE IF NOT EXISTS recipients (
@@ -38,10 +45,12 @@ CREATE TABLE IF NOT EXISTS recipients (
     uid          TEXT NOT NULL UNIQUE,
     batch_id     INTEGER NOT NULL REFERENCES batches(id),
     position     INTEGER NOT NULL,
+    client_id    INTEGER,
     name         TEXT NOT NULL,
     email        TEXT NOT NULL,
     email_key    TEXT NOT NULL,
-    amount_cents INTEGER NOT NULL CHECK (amount_cents >= 0),
+    amount_cents INTEGER CHECK (amount_cents IS NULL OR amount_cents >= 0),
+    fields       TEXT NOT NULL DEFAULT '{}',
     period       TEXT NOT NULL,
     comm_type    TEXT NOT NULL,
     status       TEXT NOT NULL CHECK (status IN ('pending', 'sending', 'accepted', 'error', 'uncertain')),
@@ -51,9 +60,41 @@ CREATE TABLE IF NOT EXISTS recipients (
     updated_at   TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS templates (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    comm_type   TEXT NOT NULL UNIQUE,
+    name        TEXT NOT NULL,
+    name_key    TEXT NOT NULL,
+    subject     TEXT NOT NULL,
+    body        TEXT NOT NULL,
+    archived    INTEGER NOT NULL DEFAULT 0,
+    created_at  TEXT NOT NULL,
+    updated_at  TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS clients (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    name        TEXT NOT NULL,
+    email       TEXT NOT NULL,
+    email_key   TEXT NOT NULL UNIQUE,
+    created_at  TEXT NOT NULL,
+    updated_at  TEXT NOT NULL
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_templates_name ON templates (name_key) WHERE archived = 0;
+"""
+
+INDEXES = """
 CREATE INDEX IF NOT EXISTS idx_recipients_key ON recipients (email_key, period, comm_type);
 CREATE INDEX IF NOT EXISTS idx_recipients_batch ON recipients (batch_id);
 """
+
+RECIPIENT_COLUMNS = ("id, uid, batch_id, position, name, email, email_key, amount_cents, period, "
+                     "comm_type, status, attempted_at, error, resolution, updated_at")
+
+
+class ConflictError(Exception):
+    """Operación rechazada por el estado de los datos (mensaje apto para el usuario)."""
 
 
 class DuplicateError(Exception):
@@ -71,8 +112,16 @@ class Database:
         self.path = str(path)
         Path(self.path).parent.mkdir(parents=True, exist_ok=True)
         with self.connect() as conn:
+            had_clients = conn.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='clients'").fetchone()
+            had_batches = conn.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='batches'").fetchone()
+            if had_batches:
+                self._migrate_batches(conn)
             conn.executescript(SCHEMA)
-            self._migrate(conn)
+            self._migrate_recipients(conn)
+            conn.executescript(INDEXES)
+            self._seed(conn, import_clients=not had_clients)
         if os.name != "nt":
             try:
                 os.chmod(self.path, 0o600)
@@ -80,11 +129,61 @@ class Database:
                 pass
 
     @staticmethod
-    def _migrate(conn):
-        # Bases creadas con versiones anteriores.
+    def _migrate_batches(conn):
+        # Bases creadas con versiones anteriores: columnas nuevas de batches.
         cols = {r["name"] for r in conn.execute("PRAGMA table_info(batches)")}
         if "sender" not in cols:
             conn.execute("ALTER TABLE batches ADD COLUMN sender TEXT NOT NULL DEFAULT ''")
+        if "template_id" not in cols:
+            conn.execute("ALTER TABLE batches ADD COLUMN template_id INTEGER")
+            conn.execute("ALTER TABLE batches ADD COLUMN template_name TEXT NOT NULL DEFAULT ''")
+            conn.execute("ALTER TABLE batches ADD COLUMN subject_tpl TEXT NOT NULL DEFAULT ''")
+            conn.execute("ALTER TABLE batches ADD COLUMN body_tpl TEXT NOT NULL DEFAULT ''")
+            # Hasta ahora solo existía la plantilla de cuotas.
+            conn.execute("UPDATE batches SET template_name=?, subject_tpl=?, body_tpl=?",
+                         (core.DEFAULT_TEMPLATE_NAME, core.SUBJECT_TEMPLATE, core.BODY_TEMPLATE))
+
+    @staticmethod
+    def _migrate_recipients(conn):
+        # El importe pasa a ser opcional (no todas las plantillas lo usan) y se
+        # guardan los valores de los campos. SQLite no permite cambiar una
+        # restricción, así que se reconstruye la tabla conservando los datos.
+        cols = {r["name"] for r in conn.execute("PRAGMA table_info(recipients)")}
+        if "fields" in cols:
+            return
+        create = SCHEMA.split("CREATE TABLE IF NOT EXISTS recipients", 1)[1].split(";", 1)[0]
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            conn.execute("CREATE TABLE recipients_new" + create)
+            conn.execute(f"INSERT INTO recipients_new ({RECIPIENT_COLUMNS}) "
+                         f"SELECT {RECIPIENT_COLUMNS} FROM recipients")
+            for row in conn.execute("SELECT id, amount_cents FROM recipients_new").fetchall():
+                conn.execute("UPDATE recipients_new SET fields=? WHERE id=?",
+                             (json.dumps({core.AMOUNT_FIELD: core.format_amount(row["amount_cents"])}),
+                              row["id"]))
+            conn.execute("DROP TABLE recipients")
+            conn.execute("ALTER TABLE recipients_new RENAME TO recipients")
+            conn.execute("COMMIT")
+        except BaseException:
+            conn.execute("ROLLBACK")
+            raise
+
+    @staticmethod
+    def _seed(conn, import_clients):
+        ts = now()
+        if not conn.execute("SELECT 1 FROM templates WHERE comm_type=?", (core.COMM_TYPE_CUOTA,)).fetchone():
+            conn.execute(
+                "INSERT INTO templates (comm_type, name, name_key, subject, body, created_at, updated_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (core.COMM_TYPE_CUOTA, core.DEFAULT_TEMPLATE_NAME, core.DEFAULT_TEMPLATE_NAME.lower(),
+                 core.SUBJECT_TEMPLATE, core.BODY_TEMPLATE, ts, ts))
+        if import_clients:
+            # Primera vez con la lista de clientes: se crean a partir de los
+            # destinatarios ya registrados (el nombre más reciente de cada correo).
+            conn.execute(
+                "INSERT OR IGNORE INTO clients (name, email, email_key, created_at, updated_at) "
+                "SELECT name, email, email_key, ?, ? FROM recipients "
+                "WHERE id IN (SELECT MAX(id) FROM recipients GROUP BY email_key) ORDER BY id", (ts, ts))
 
     def connect(self):
         conn = sqlite3.connect(self.path, timeout=10, isolation_level=None)
@@ -120,21 +219,7 @@ class Database:
         return c1 + c2
 
     def backup(self, backup_dir, keep=30):
-        """Copia de seguridad consistente (API de backup de SQLite)."""
-        backup_dir = Path(backup_dir)
-        backup_dir.mkdir(parents=True, exist_ok=True)
-        target = backup_dir / f"{Path(self.path).stem}-{datetime.now():%Y%m%d-%H%M%S}.db"
-        src = sqlite3.connect(self.path)
-        dst = sqlite3.connect(str(target))
-        try:
-            src.backup(dst)
-        finally:
-            dst.close()
-            src.close()
-        backups = sorted(backup_dir.glob(f"{Path(self.path).stem}-*.db"))
-        for old in backups[:-keep]:
-            old.unlink(missing_ok=True)
-        return target
+        return backup_file(self.path, backup_dir, keep)
 
     # --- Duplicados ---------------------------------------------------------
 
@@ -165,8 +250,13 @@ class Database:
 
     # --- Tandas -------------------------------------------------------------
 
-    def create_batch(self, period_key, comm_type, mailer_name, clients, resend_ack=(), sender=""):
+    def create_batch(self, period_key, comm_type, mailer_name, clients, resend_ack=(), sender="",
+                     template=None):
         """Crea la tanda y sus destinatarios en una única transacción.
+
+        template: dict con id, name, subject y body. Se guarda una copia para
+        que los correos se generen con el texto que se confirmó aunque la
+        plantilla se edite después.
 
         Lanza DuplicateError si algún destinatario tiene un envío en curso,
         incierto, o aceptado sin confirmación explícita de reenvío.
@@ -182,16 +272,22 @@ class Database:
                             or (c["status"] in RESENDABLE_STATUSES and c["email_key"] not in ack)]
                 if blocking:
                     raise DuplicateError(blocking)
+                tpl = template or {"id": None, "name": core.DEFAULT_TEMPLATE_NAME,
+                                   "subject": core.SUBJECT_TEMPLATE, "body": core.BODY_TEMPLATE}
                 cur = conn.execute(
-                    "INSERT INTO batches (uid, period, comm_type, mailer, sender, status, created_at) "
-                    "VALUES (?, ?, ?, ?, ?, 'in_progress', ?)",
-                    (str(uuid.uuid4()), period_key, comm_type, mailer_name, sender, ts))
+                    "INSERT INTO batches (uid, period, comm_type, mailer, sender, template_id, template_name, "
+                    "subject_tpl, body_tpl, status, created_at) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'in_progress', ?)",
+                    (str(uuid.uuid4()), period_key, comm_type, mailer_name, sender, tpl["id"], tpl["name"],
+                     tpl["subject"], tpl["body"], ts))
                 batch_id = cur.lastrowid
                 conn.executemany(
-                    "INSERT INTO recipients (uid, batch_id, position, name, email, email_key, amount_cents, "
-                    "period, comm_type, status, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?)",
-                    [(str(uuid.uuid4()), batch_id, i, c.name, c.email, c.email_key, c.amount_cents,
-                      period_key, comm_type, ts) for i, c in enumerate(clients)])
+                    "INSERT INTO recipients (uid, batch_id, position, client_id, name, email, email_key, "
+                    "amount_cents, fields, period, comm_type, status, updated_at) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?)",
+                    [(str(uuid.uuid4()), batch_id, i, c.client_id, c.name, c.email, c.email_key,
+                      c.amount_cents, json.dumps(c.fields, ensure_ascii=False), period_key, comm_type, ts)
+                     for i, c in enumerate(clients)])
                 conn.execute("COMMIT")
             except BaseException:
                 conn.execute("ROLLBACK")
@@ -201,7 +297,8 @@ class Database:
     def pending_recipients(self, batch_id):
         with self.connect() as conn:
             return [dict(r) for r in conn.execute(
-                "SELECT * FROM recipients WHERE batch_id=? AND status='pending' ORDER BY position",
+                "SELECT r.*, b.subject_tpl, b.body_tpl FROM recipients r JOIN batches b ON b.id = r.batch_id "
+                "WHERE r.batch_id=? AND r.status='pending' ORDER BY r.position",
                 (batch_id,)).fetchall()]
 
     def mark_sending(self, recipient_id):
@@ -255,7 +352,8 @@ class Database:
 
     def history(self, period_key=None, status=None, limit=500):
         sql = ("SELECT r.uid, r.batch_id, r.name, r.email, r.amount_cents, r.period, r.status, "
-               "r.attempted_at, r.error, r.resolution, b.created_at AS batch_created_at, b.sender "
+               "r.attempted_at, r.error, r.resolution, b.created_at AS batch_created_at, b.sender, "
+               "b.template_name "
                "FROM recipients r JOIN batches b ON b.id = r.batch_id WHERE 1=1")
         args = []
         if period_key:
@@ -284,15 +382,108 @@ class Database:
                 (new_status, note, now(), recipient_uid)).rowcount
         return n == 1
 
-    def last_batch_clients(self):
-        """Clientes de la tanda más reciente, para reutilizarlos como borrador."""
+    # --- Plantillas ----------------------------------------------------------
+
+    def list_templates(self):
         with self.connect() as conn:
-            b = conn.execute("SELECT id FROM batches ORDER BY id DESC LIMIT 1").fetchone()
-            if not b:
-                return []
             return [dict(r) for r in conn.execute(
-                "SELECT name, email, amount_cents FROM recipients WHERE batch_id=? ORDER BY position",
-                (b[0],)).fetchall()]
+                "SELECT id, comm_type, name, subject, body, updated_at FROM templates "
+                "WHERE archived=0 ORDER BY name_key").fetchall()]
+
+    def get_template(self, template_id):
+        """Plantilla activa (no eliminada) o None."""
+        with self.connect() as conn:
+            row = conn.execute(
+                "SELECT id, comm_type, name, subject, body, updated_at FROM templates WHERE id=? AND archived=0",
+                (template_id,)).fetchone()
+        return dict(row) if row else None
+
+    def save_template(self, template_id, name, subject, body):
+        """Crea (template_id=None) o modifica una plantilla. Devuelve su id."""
+        ts = now()
+        with self.connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            try:
+                clash = conn.execute(
+                    "SELECT id FROM templates WHERE name_key=? AND archived=0 AND id IS NOT ?",
+                    (name.lower(), template_id)).fetchone()
+                if clash:
+                    raise ConflictError(f"Ya existe una plantilla llamada «{name}».")
+                if template_id is None:
+                    template_id = conn.execute(
+                        "INSERT INTO templates (comm_type, name, name_key, subject, body, created_at, updated_at) "
+                        "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                        (f"tpl-{uuid.uuid4()}", name, name.lower(), subject, body, ts, ts)).lastrowid
+                else:
+                    n = conn.execute(
+                        "UPDATE templates SET name=?, name_key=?, subject=?, body=?, updated_at=? "
+                        "WHERE id=? AND archived=0",
+                        (name, name.lower(), subject, body, ts, template_id)).rowcount
+                    if n != 1:
+                        raise ConflictError("La plantilla no existe o se ha eliminado.")
+                conn.execute("COMMIT")
+            except BaseException:
+                conn.execute("ROLLBACK")
+                raise
+        return template_id
+
+    def delete_template(self, template_id):
+        """Se marca como eliminada: el historial sigue mostrando su nombre."""
+        with self.connect() as conn:
+            n = conn.execute("UPDATE templates SET archived=1, updated_at=? WHERE id=? AND archived=0",
+                             (now(), template_id)).rowcount
+        return n == 1
+
+    # --- Clientes -------------------------------------------------------------
+
+    def list_clients(self):
+        with self.connect() as conn:
+            return [dict(r) for r in conn.execute(
+                "SELECT id, name, email FROM clients ORDER BY name COLLATE NOCASE, id").fetchall()]
+
+    def get_clients(self, ids):
+        """{id: cliente} de los ids indicados que existan."""
+        ids = sorted(set(ids))
+        out = {}
+        with self.connect() as conn:
+            for i in range(0, len(ids), 500):
+                chunk = ids[i:i + 500]
+                marks = ",".join("?" * len(chunk))
+                for r in conn.execute(f"SELECT id, name, email FROM clients WHERE id IN ({marks})", chunk):
+                    out[r["id"]] = dict(r)
+        return out
+
+    def save_client(self, client_id, name, email):
+        """Crea (client_id=None) o modifica un cliente. Devuelve su id."""
+        ts = now()
+        key = core.email_key(email)
+        with self.connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            try:
+                clash = conn.execute("SELECT name FROM clients WHERE email_key=? AND id IS NOT ?",
+                                     (key, client_id)).fetchone()
+                if clash:
+                    raise ConflictError(f"Ya existe un cliente con el correo {email} ({clash['name']}).")
+                if client_id is None:
+                    client_id = conn.execute(
+                        "INSERT INTO clients (name, email, email_key, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
+                        (name, email, key, ts, ts)).lastrowid
+                else:
+                    n = conn.execute("UPDATE clients SET name=?, email=?, email_key=?, updated_at=? WHERE id=?",
+                                     (name, email, key, ts, client_id)).rowcount
+                    if n != 1:
+                        raise ConflictError("El cliente no existe o se ha eliminado.")
+                conn.execute("COMMIT")
+            except BaseException:
+                conn.execute("ROLLBACK")
+                raise
+        return client_id
+
+    def delete_client(self, client_id):
+        """Elimina el cliente de la lista. El historial de envíos se conserva."""
+        with self.connect() as conn:
+            n = conn.execute("DELETE FROM clients WHERE id=?", (client_id,)).rowcount
+        return n == 1
 
 
 class _Conn:
@@ -313,3 +504,25 @@ class _Conn:
     def close(self):
         self._conn.close()
 
+
+def backup_file(path, backup_dir, keep=30):
+    """Copia de seguridad consistente (API de backup de SQLite).
+
+    Al arrancar se hace antes de abrir la base, para conservar una copia
+    previa a cualquier migración de versión.
+    """
+    backup_dir = Path(backup_dir)
+    backup_dir.mkdir(parents=True, exist_ok=True)
+    stem = Path(path).stem
+    target = backup_dir / f"{stem}-{datetime.now():%Y%m%d-%H%M%S}.db"
+    src = sqlite3.connect(str(path))
+    dst = sqlite3.connect(str(target))
+    try:
+        src.backup(dst)
+    finally:
+        dst.close()
+        src.close()
+    backups = sorted(backup_dir.glob(f"{stem}-*.db"))
+    for old in backups[:-keep]:
+        old.unlink(missing_ok=True)
+    return target
