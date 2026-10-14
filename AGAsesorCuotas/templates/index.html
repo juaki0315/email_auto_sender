@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="csrf-token" content="{{ csrf_token }}">
   <title>AG Asesor · Correos</title>
+  <link rel="icon" type="image/png" href="{{ url_for('static', filename='logo-ag.png') }}">
   <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
 </head>
 <body data-simulation="{{ 'true' if simulation else 'false' }}">
@@ -16,20 +17,7 @@
 
   <header class="topbar">
     <div class="brand">
-      <svg class="logo" viewBox="0 0 96 60" role="img" aria-label="AG Asesores" focusable="false">
-        <defs>
-          <radialGradient id="logo-sphere" cx="35%" cy="30%" r="75%">
-            <stop offset="0" stop-color="#d9e8ff"/>
-            <stop offset=".35" stop-color="#4f86e8"/>
-            <stop offset=".75" stop-color="#173f9e"/>
-            <stop offset="1" stop-color="#071a4a"/>
-          </radialGradient>
-        </defs>
-        <ellipse cx="40" cy="31" rx="27" ry="25" fill="#0b0d12"/>
-        <circle cx="23" cy="28" r="17" fill="url(#logo-sphere)"/>
-        <text x="35" y="42" class="logo-a">a</text>
-        <text x="60" y="42" class="logo-g">g</text>
-      </svg>
+      <img class="logo" src="{{ url_for('static', filename='logo-ag.png') }}" alt="AG Asesores" width="254" height="173">
       <div class="brand-text">
         <strong>AG ASESORES</strong>
         <span>Envío de correos a clientes</span>
