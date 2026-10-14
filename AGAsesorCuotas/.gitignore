@@ -1,0 +1,21 @@
+# Entorno
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# Compilación
+build/
+dist/
+
+# Datos locales: NUNCA subir datos de clientes
+instance/
+*.db
+*.db-wal
+*.db-shm
+*.log
+copias/
+config.json
+
+# Configuración local del editor/Claude
+.claude/

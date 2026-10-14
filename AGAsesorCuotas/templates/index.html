@@ -1,0 +1,250 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="csrf-token" content="{{ csrf_token }}">
+  <title>AG Asesor · Cuotas</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
+</head>
+<body data-simulation="{{ 'true' if simulation else 'false' }}">
+  {% if simulation %}
+  <div class="sim-banner" role="alert">
+    MODO SIMULADO — no se enviará ningún correo real. Los datos se guardan aparte de los envíos reales.
+  </div>
+  {% endif %}
+
+  <header class="topbar">
+    <div class="brand">
+      <span class="logo" aria-hidden="true">AG</span>
+      <div>
+        <h1>Envío de cuotas</h1>
+        <p class="muted">AG Asesor · remitente <span id="header-sender">{{ sender or "sin seleccionar" }}</span></p>
+      </div>
+    </div>
+    <div class="outlook-status" id="outlook-status" data-state="checking">
+      <span class="dot" aria-hidden="true"></span>
+      <span id="outlook-status-text">Comprobando Outlook…</span>
+      <button type="button" class="btn-link" id="btn-recheck">Volver a comprobar</button>
+    </div>
+  </header>
+
+  <nav class="tabs" role="tablist">
+    <button type="button" role="tab" class="tab active" data-tab="batch" aria-selected="true">Nueva tanda</button>
+    <button type="button" role="tab" class="tab" data-tab="history" aria-selected="false">
+      Historial <span class="badge warn" id="uncertain-badge" hidden></span>
+    </button>
+    <button type="button" role="tab" class="tab" data-tab="settings" aria-selected="false">Configuración</button>
+  </nav>
+
+  <main>
+    <!-- ================= NUEVA TANDA ================= -->
+    <section id="tab-batch" class="tab-panel">
+      <div class="card period-card">
+        <h2>Periodo de la cuota</h2>
+        <div class="period-fields">
+          <label>Mes
+            <select id="month">
+              {% for m in months %}
+              <option value="{{ loop.index }}" {% if loop.index == month %}selected{% endif %}>{{ m|capitalize }}</option>
+              {% endfor %}
+            </select>
+          </label>
+          <label>Año
+            <input id="year" type="number" min="2000" max="2100" step="1" value="{{ year }}">
+          </label>
+          <p class="period-preview">Asunto: <strong id="subject-preview"></strong></p>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-head">
+          <h2>Clientes</h2>
+          <div class="actions">
+            <button type="button" class="btn" id="btn-load-last">Cargar última tanda</button>
+            <button type="button" class="btn" id="btn-clear">Vaciar tabla</button>
+          </div>
+        </div>
+
+        <div class="table-wrap">
+          <table class="clients" id="clients-table">
+            <thead>
+              <tr>
+                <th class="col-num">#</th>
+                <th>Nombre del cliente</th>
+                <th>Correo electrónico</th>
+                <th class="col-amount">Importe (€)</th>
+                <th class="col-del"><span class="sr-only">Eliminar</span></th>
+              </tr>
+            </thead>
+            <tbody id="clients-body"></tbody>
+          </table>
+        </div>
+        <p class="empty" id="empty-msg">Todavía no hay clientes. Pulse «Añadir cliente».</p>
+        <button type="button" class="btn btn-add" id="btn-add">+ Añadir cliente</button>
+      </div>
+
+      <div class="card summary" id="summary">
+        <div class="stat"><span class="label">Clientes</span><span class="value" id="sum-rows">0</span></div>
+        <div class="stat"><span class="label">Válidos</span><span class="value" id="sum-valid">0</span></div>
+        <div class="stat"><span class="label">Con errores</span><span class="value" id="sum-errors">0</span></div>
+        <div class="stat"><span class="label">Periodo</span><span class="value" id="sum-period">—</span></div>
+        <div class="stat total"><span class="label">Importe total</span><span class="value" id="sum-total">0,00 €</span></div>
+        <button type="button" class="btn btn-primary" id="btn-review" disabled>Revisar y enviar…</button>
+      </div>
+      <p class="hint" id="review-hint"></p>
+    </section>
+
+    <!-- ================= HISTORIAL ================= -->
+    <section id="tab-history" class="tab-panel" hidden>
+      <div class="card">
+        <div class="card-head">
+          <h2>Historial de envíos</h2>
+          <div class="actions filters">
+            <label>Mes
+              <select id="h-month">
+                <option value="">Todos</option>
+                {% for m in months %}<option value="{{ loop.index }}">{{ m|capitalize }}</option>{% endfor %}
+              </select>
+            </label>
+            <label>Año <input id="h-year" type="number" min="2000" max="2100" value="{{ year }}"></label>
+            <label>Estado
+              <select id="h-status">
+                <option value="">Todos</option>
+                <option value="uncertain">No confirmado</option>
+                <option value="error">Error</option>
+                <option value="accepted">Aceptado por Outlook</option>
+              </select>
+            </label>
+            <button type="button" class="btn" id="btn-h-refresh">Actualizar</button>
+          </div>
+        </div>
+        <p class="note">
+          «Aceptado por Outlook» significa que Outlook recibió la orden de envío; no garantiza que el
+          mensaje haya llegado al destinatario. Los resultados «No confirmado» deben revisarse en Outlook
+          (Elementos enviados / Bandeja de salida) antes de volver a enviar.
+        </p>
+        <div class="table-wrap">
+          <table class="history">
+            <thead>
+              <tr>
+                <th>Fecha del intento</th><th>Periodo</th><th>Cliente</th><th>Correo</th>
+                <th class="col-amount">Importe</th><th>Estado</th><th>Detalle</th>
+              </tr>
+            </thead>
+            <tbody id="history-body"></tbody>
+          </table>
+        </div>
+        <p class="empty" id="history-empty" hidden>No hay registros para este filtro.</p>
+      </div>
+    </section>
+
+    <!-- ================= CONFIGURACIÓN ================= -->
+    <section id="tab-settings" class="tab-panel" hidden>
+      <div class="card settings-card">
+        <h2>Cuenta de envío</h2>
+        <p class="muted">
+          Los correos se envían desde una de las cuentas configuradas en Outlook clásico en este
+          ordenador. Elija cuál usar; la elección se guarda para las próximas veces.
+          {% if simulation %}<br><strong>Modo simulado:</strong> las cuentas de la lista son ficticias.{% endif %}
+        </p>
+        <div class="settings-row">
+          <label>Cuenta de Outlook
+            <select id="acc-select" disabled><option>Cargando cuentas…</option></select>
+          </label>
+          <button type="button" class="btn btn-primary" id="btn-acc-save" disabled>Usar esta cuenta</button>
+          <button type="button" class="btn" id="btn-acc-reload">Volver a leer cuentas de Outlook</button>
+        </div>
+        <p class="settings-msg" id="acc-msg" hidden></p>
+        <p class="note">
+          Si la cuenta que quiere usar no aparece, añádala primero en Outlook clásico
+          (Archivo → Agregar cuenta), reinicie Outlook y pulse «Volver a leer cuentas de Outlook».
+          La cuenta se comprueba de nuevo antes de cada envío y queda registrada en el historial.
+        </p>
+      </div>
+    </section>
+  </main>
+
+  <footer class="foot muted">{{ app_name }} · v{{ version }}</footer>
+
+  <!-- ================= CONFIRMACIÓN ================= -->
+  <dialog id="confirm-dialog" aria-labelledby="confirm-title">
+    <div class="dialog-body" id="confirm-step">
+      <h2 id="confirm-title">Confirmar envío</h2>
+      <div class="confirm-summary">
+        <div><span class="label">Periodo</span><strong id="c-period"></strong></div>
+        <div><span class="label">Destinatarios</span><strong id="c-count"></strong></div>
+        <div><span class="label">Importe total</span><strong id="c-total"></strong></div>
+        <div><span class="label">Remitente</span><strong id="c-sender"></strong></div>
+      </div>
+
+      <div class="alert danger" id="c-blocking" hidden>
+        <strong>No se puede enviar.</strong> Estos destinatarios tienen un envío en curso o sin confirmar
+        para este periodo. Revíselos en el Historial o quítelos de la tabla:
+        <ul id="c-blocking-list"></ul>
+      </div>
+      <div class="alert warn" id="c-resend" hidden>
+        <strong>Ya se envió la cuota de este periodo a:</strong>
+        <ul id="c-resend-list"></ul>
+        <label class="check"><input type="checkbox" id="c-resend-ack">
+          Quiero volver a enviarles el correo de forma intencionada.</label>
+      </div>
+
+      <details class="recipients-details">
+        <summary>Ver la lista de destinatarios</summary>
+        <div class="table-wrap small">
+          <table><thead><tr><th>Nombre</th><th>Correo</th><th class="col-amount">Importe</th></tr></thead>
+            <tbody id="c-recipients"></tbody></table>
+        </div>
+      </details>
+
+      <div class="mail-preview">
+        <div class="mail-head">
+          <div><span class="label">Para:</span> <span id="c-sample-to"></span></div>
+          <div><span class="label">Asunto:</span> <span id="c-sample-subject"></span></div>
+        </div>
+        <pre id="c-sample-body"></pre>
+        <p class="muted small">Ejemplo con el primer cliente. Cada cliente recibe un correo individual con sus datos.</p>
+      </div>
+
+      <label class="check confirm-check"><input type="checkbox" id="c-ack">
+        He comprobado que los destinatarios, el periodo y los importes son correctos.</label>
+      {% if simulation %}<p class="sim-inline">Modo simulado: no se enviará nada.</p>{% endif %}
+      <p class="error-text" id="c-error" hidden></p>
+
+      <div class="dialog-actions">
+        <button type="button" class="btn" id="c-cancel">Cancelar</button>
+        <button type="button" class="btn btn-primary" id="c-send" disabled>Enviar</button>
+      </div>
+    </div>
+
+    <div class="dialog-body" id="progress-step" hidden>
+      <h2 id="p-title">Enviando…</h2>
+      <p class="muted" id="p-warning">No cierre la aplicación ni Outlook hasta que termine.</p>
+      <div class="progress"><div class="progress-bar" id="p-bar"></div></div>
+      <p id="p-text"></p>
+      <div class="p-counts" id="p-counts"></div>
+      <div class="table-wrap small">
+        <table><thead><tr><th>Cliente</th><th>Correo</th><th>Estado</th><th>Detalle</th></tr></thead>
+          <tbody id="p-body"></tbody></table>
+      </div>
+      <div class="dialog-actions">
+        <button type="button" class="btn" id="p-history" hidden>Ver historial</button>
+        <button type="button" class="btn btn-primary" id="p-close" hidden>Cerrar y empezar nueva tanda</button>
+      </div>
+    </div>
+  </dialog>
+
+  <template id="row-template">
+    <tr>
+      <td class="col-num"></td>
+      <td><input type="text" data-field="name" maxlength="200" autocomplete="off" aria-label="Nombre del cliente"><span class="field-error"></span></td>
+      <td><input type="email" data-field="email" maxlength="254" autocomplete="off" aria-label="Correo electrónico"><span class="field-error"></span></td>
+      <td class="col-amount"><input type="text" data-field="amount" inputmode="decimal" autocomplete="off" placeholder="0,00" aria-label="Importe"><span class="field-error"></span></td>
+      <td class="col-del"><button type="button" class="btn-icon" data-action="delete" title="Eliminar fila" aria-label="Eliminar fila">✕</button></td>
+    </tr>
+  </template>
+
+  <script src="{{ url_for('static', filename='app.js') }}"></script>
+</body>
+</html>
