@@ -14,35 +14,46 @@
   </div>
   {% endif %}
 
-  <header class="topbar">
+  <div class="shell">
+  <aside class="sidebar">
     <div class="brand">
       <span class="logo" aria-hidden="true">AG</span>
-      <div>
-        <h1>Envío de correos a clientes</h1>
-        <p class="muted">AG Asesor · remitente <span id="header-sender">{{ sender or "sin seleccionar" }}</span></p>
+      <div class="brand-text">
+        <strong>AG Asesor</strong>
+        <span>Correos a clientes</span>
       </div>
     </div>
-    <div class="outlook-status" id="outlook-status" data-state="checking">
-      <span class="dot" aria-hidden="true"></span>
-      <span id="outlook-status-text">Comprobando Outlook…</span>
-      <button type="button" class="btn-link" id="btn-recheck">Volver a comprobar</button>
-    </div>
-  </header>
 
-  <nav class="tabs" role="tablist">
-    <button type="button" role="tab" class="tab active" data-tab="batch" aria-selected="true">Enviar</button>
-    <button type="button" role="tab" class="tab" data-tab="templates" aria-selected="false">Plantillas</button>
-    <button type="button" role="tab" class="tab" data-tab="history" aria-selected="false">
-      Historial <span class="badge warn" id="uncertain-badge" hidden></span>
-    </button>
-    <button type="button" role="tab" class="tab" data-tab="settings" aria-selected="false">Configuración</button>
-  </nav>
+    <nav class="tabs" role="tablist" aria-orientation="vertical">
+      <button type="button" role="tab" class="tab active" data-tab="batch" aria-selected="true"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M22 2 11 13"/><path d="M22 2 15 22l-4-9-9-4 20-7z"/></svg><span>Enviar</span></button>
+      <button type="button" role="tab" class="tab" data-tab="templates" aria-selected="false"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><path d="M14 3v6h6"/><path d="M8 13h8M8 17h5"/></svg><span>Plantillas</span></button>
+      <button type="button" role="tab" class="tab" data-tab="history" aria-selected="false">
+        <svg class="icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg><span>Historial</span> <span class="badge warn" id="uncertain-badge" hidden></span>
+      </button>
+      <button type="button" role="tab" class="tab" data-tab="settings" aria-selected="false"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg><span>Configuración</span></button>
+    </nav>
+
+    <div class="sidebar-foot">
+      <div class="outlook-status" id="outlook-status" data-state="checking">
+        <span class="dot" aria-hidden="true"></span>
+        <span id="outlook-status-text">Comprobando Outlook…</span>
+      </div>
+      <p class="sender-line"><span class="label">Remitente</span>
+        <span id="header-sender">{{ sender or "sin seleccionar" }}</span></p>
+      <button type="button" class="btn-link" id="btn-recheck">Volver a comprobar</button>
+      <p class="version">{{ app_name }} · v{{ version }}</p>
+    </div>
+  </aside>
 
   <main>
     <!-- ================= ENVIAR ================= -->
     <section id="tab-batch" class="tab-panel">
+      <header class="page-head">
+        <h1>Enviar correos</h1>
+        <p>Elija la plantilla, marque los clientes y revise el envío antes de confirmarlo.</p>
+      </header>
       <div class="card period-card">
-        <h2>Correo a enviar</h2>
+        <h2><span class="step">1</span>Correo a enviar</h2>
         <div class="period-fields">
           <label>Plantilla
             <select id="tpl-select"><option>Cargando…</option></select>
@@ -66,7 +77,7 @@
 
       <div class="card">
         <div class="card-head">
-          <h2>Clientes <span class="muted small" id="clients-count"></span></h2>
+          <h2><span class="step">2</span>Destinatarios <span class="muted small" id="clients-count"></span></h2>
           <div class="actions">
             <input type="search" id="client-search" placeholder="Buscar cliente…" aria-label="Buscar cliente">
             <button type="button" class="btn" id="btn-add">+ Añadir cliente</button>
@@ -101,6 +112,7 @@
       </div>
 
       <div class="card summary" id="summary">
+        <span class="step step-light">3</span>
         <div class="stat"><span class="label">Seleccionados</span><span class="value" id="sum-rows">0</span></div>
         <div class="stat"><span class="label">Con datos pendientes</span><span class="value" id="sum-errors">0</span></div>
         <div class="stat"><span class="label">Periodo</span><span class="value" id="sum-period">—</span></div>
@@ -112,6 +124,10 @@
 
     <!-- ================= PLANTILLAS ================= -->
     <section id="tab-templates" class="tab-panel" hidden>
+      <header class="page-head">
+        <h1>Plantillas</h1>
+        <p>Textos reutilizables con campos que se rellenan en cada envío.</p>
+      </header>
       <div class="card" id="tpl-list-card">
         <div class="card-head">
           <h2>Plantillas de correo</h2>
@@ -179,9 +195,13 @@
 
     <!-- ================= HISTORIAL ================= -->
     <section id="tab-history" class="tab-panel" hidden>
+      <header class="page-head">
+        <h1>Historial</h1>
+        <p>Todos los intentos de envío, con su estado y la cuenta desde la que salieron.</p>
+      </header>
       <div class="card">
         <div class="card-head">
-          <h2>Historial de envíos</h2>
+          <h2>Envíos registrados</h2>
           <div class="actions filters">
             <label>Mes
               <select id="h-month">
@@ -223,6 +243,10 @@
 
     <!-- ================= CONFIGURACIÓN ================= -->
     <section id="tab-settings" class="tab-panel" hidden>
+      <header class="page-head">
+        <h1>Configuración</h1>
+        <p>Cuenta de Outlook desde la que se envían los correos.</p>
+      </header>
       <div class="card settings-card">
         <h2>Cuenta de envío</h2>
         <p class="muted">
@@ -247,7 +271,7 @@
     </section>
   </main>
 
-  <footer class="foot muted">{{ app_name }} · v{{ version }}</footer>
+  </div>
 
   <!-- ================= CONFIRMACIÓN ================= -->
   <dialog id="confirm-dialog" aria-labelledby="confirm-title">
