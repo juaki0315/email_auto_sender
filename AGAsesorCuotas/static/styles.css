@@ -122,7 +122,7 @@ body[data-simulation="true"] .sidebar { top: 36px; height: calc(100vh - 36px); }
 .sidebar .btn-link { color: var(--gold); align-self: flex-start; padding: 0; }
 .version { color: #66778d; font-size: .76rem; }
 
-main { padding: 30px 36px 40px; max-width: 1240px; width: 100%; }
+main { padding: 30px 36px 40px; max-width: 1760px; width: 100%; }
 .page-head { margin-bottom: 20px; }
 .page-head h1 { font-size: 1.65rem; font-weight: 700; color: var(--ink); }
 .page-head p { margin: 4px 0 0; color: var(--muted); }
@@ -332,6 +332,27 @@ dialog::backdrop { background: rgba(14, 27, 46, .5); backdrop-filter: blur(2px);
 .progress-bar.done-ok { background: var(--ok); }
 .progress-bar.done-warn { background: #d99a00; }
 .p-counts { display: flex; gap: 8px; flex-wrap: wrap; }
+
+/* ------------------------------------------------------------------ pantallas anchas */
+
+/* Enviar en dos columnas: pasos 1 y 2 a la izquierda; resumen fijo a la derecha. */
+@media (min-width: 1280px) {
+  #tab-batch:not([hidden]) {
+    display: grid; grid-template-columns: minmax(0, 1fr) 330px; column-gap: 22px; align-items: start;
+  }
+  #tab-batch .page-head { grid-column: 1 / -1; }
+  .send-side { position: sticky; top: 20px; }
+  body[data-simulation="true"] .send-side { top: 56px; }
+
+  #tab-batch .summary {
+    position: static; display: grid; grid-template-columns: 1fr 1fr; gap: 16px 18px; align-items: start; padding: 22px;
+  }
+  #tab-batch .summary .step { grid-column: 1 / -1; }
+  #tab-batch .summary .stat.total { grid-column: 1 / -1; padding-top: 14px; border-top: 1px solid var(--ink-line); }
+  #tab-batch .summary .stat.total .value { font-size: 2rem; }
+  #tab-batch .summary .btn-primary { grid-column: 1 / -1; margin: 4px 0 0; width: 100%; padding: 13px; }
+  #tab-batch .hint { text-align: left; margin: 0 4px; }
+}
 
 /* ------------------------------------------------------------------ pantallas estrechas */
 

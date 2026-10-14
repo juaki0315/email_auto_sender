@@ -52,6 +52,7 @@
         <h1>Enviar correos</h1>
         <p>Elija la plantilla, marque los clientes y revise el envío antes de confirmarlo.</p>
       </header>
+      <div class="send-main">
       <div class="card period-card">
         <h2><span class="step">1</span>Correo a enviar</h2>
         <div class="period-fields">
@@ -75,7 +76,7 @@
           esta plantilla al mismo cliente en ese periodo.</p>
       </div>
 
-      <div class="card">
+      <div class="card clients-card">
         <div class="card-head">
           <h2><span class="step">2</span>Destinatarios <span class="muted small" id="clients-count"></span></h2>
           <div class="actions">
@@ -111,6 +112,9 @@
         <p class="empty" id="no-match-msg" hidden>Ningún cliente coincide con la búsqueda.</p>
       </div>
 
+      </div>
+
+      <div class="send-side">
       <div class="card summary" id="summary">
         <span class="step step-light">3</span>
         <div class="stat"><span class="label">Seleccionados</span><span class="value" id="sum-rows">0</span></div>
@@ -120,6 +124,7 @@
         <button type="button" class="btn btn-primary" id="btn-review" disabled>Revisar y enviar…</button>
       </div>
       <p class="hint" id="review-hint"></p>
+      </div>
     </section>
 
     <!-- ================= PLANTILLAS ================= -->
