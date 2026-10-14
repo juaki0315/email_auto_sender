@@ -14,26 +14,38 @@
   </div>
   {% endif %}
 
-  <div class="shell">
-  <aside class="sidebar">
+  <header class="topbar">
     <div class="brand">
-      <span class="logo" aria-hidden="true">AG</span>
+      <svg class="logo" viewBox="0 0 96 60" role="img" aria-label="AG Asesores" focusable="false">
+        <defs>
+          <radialGradient id="logo-sphere" cx="35%" cy="30%" r="75%">
+            <stop offset="0" stop-color="#d9e8ff"/>
+            <stop offset=".35" stop-color="#4f86e8"/>
+            <stop offset=".75" stop-color="#173f9e"/>
+            <stop offset="1" stop-color="#071a4a"/>
+          </radialGradient>
+        </defs>
+        <ellipse cx="40" cy="31" rx="27" ry="25" fill="#0b0d12"/>
+        <circle cx="23" cy="28" r="17" fill="url(#logo-sphere)"/>
+        <text x="35" y="42" class="logo-a">a</text>
+        <text x="60" y="42" class="logo-g">g</text>
+      </svg>
       <div class="brand-text">
-        <strong>AG Asesor</strong>
-        <span>Correos a clientes</span>
+        <strong>AG ASESORES</strong>
+        <span>Envío de correos a clientes</span>
       </div>
     </div>
 
-    <nav class="tabs" role="tablist" aria-orientation="vertical">
-      <button type="button" role="tab" class="tab active" data-tab="batch" aria-selected="true"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M22 2 11 13"/><path d="M22 2 15 22l-4-9-9-4 20-7z"/></svg><span>Enviar</span></button>
-      <button type="button" role="tab" class="tab" data-tab="templates" aria-selected="false"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><path d="M14 3v6h6"/><path d="M8 13h8M8 17h5"/></svg><span>Plantillas</span></button>
+    <nav class="tabs" role="tablist">
+      <button type="button" role="tab" class="tab active" data-tab="batch" aria-selected="true">Enviar</button>
+      <button type="button" role="tab" class="tab" data-tab="templates" aria-selected="false">Plantillas</button>
       <button type="button" role="tab" class="tab" data-tab="history" aria-selected="false">
-        <svg class="icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg><span>Historial</span> <span class="badge warn" id="uncertain-badge" hidden></span>
+        Historial <span class="badge warn" id="uncertain-badge" hidden></span>
       </button>
-      <button type="button" role="tab" class="tab" data-tab="settings" aria-selected="false"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg><span>Configuración</span></button>
+      <button type="button" role="tab" class="tab" data-tab="settings" aria-selected="false">Configuración</button>
     </nav>
 
-    <div class="sidebar-foot">
+    <div class="topbar-status">
       <div class="outlook-status" id="outlook-status" data-state="checking">
         <span class="dot" aria-hidden="true"></span>
         <span id="outlook-status-text">Comprobando Outlook…</span>
@@ -41,15 +53,15 @@
       <p class="sender-line"><span class="label">Remitente</span>
         <span id="header-sender">{{ sender or "sin seleccionar" }}</span></p>
       <button type="button" class="btn-link" id="btn-recheck">Volver a comprobar</button>
-      <p class="version">{{ app_name }} · v{{ version }}</p>
     </div>
-  </aside>
+  </header>
 
   <main>
     <!-- ================= ENVIAR ================= -->
     <section id="tab-batch" class="tab-panel">
       <header class="page-head">
-        <h1>Enviar correos</h1>
+        <p class="eyebrow">Envío de correos</p>
+        <h1>Enviar <em>correos</em>.</h1>
         <p>Elija la plantilla, marque los clientes y revise el envío antes de confirmarlo.</p>
       </header>
       <div class="send-main">
@@ -130,7 +142,8 @@
     <!-- ================= PLANTILLAS ================= -->
     <section id="tab-templates" class="tab-panel" hidden>
       <header class="page-head">
-        <h1>Plantillas</h1>
+        <p class="eyebrow">Textos reutilizables</p>
+        <h1>Plantillas de <em>correo</em>.</h1>
         <p>Textos reutilizables con campos que se rellenan en cada envío.</p>
       </header>
       <div class="card" id="tpl-list-card">
@@ -201,7 +214,8 @@
     <!-- ================= HISTORIAL ================= -->
     <section id="tab-history" class="tab-panel" hidden>
       <header class="page-head">
-        <h1>Historial</h1>
+        <p class="eyebrow">Registro</p>
+        <h1>Historial de <em>envíos</em>.</h1>
         <p>Todos los intentos de envío, con su estado y la cuenta desde la que salieron.</p>
       </header>
       <div class="card">
@@ -249,7 +263,8 @@
     <!-- ================= CONFIGURACIÓN ================= -->
     <section id="tab-settings" class="tab-panel" hidden>
       <header class="page-head">
-        <h1>Configuración</h1>
+        <p class="eyebrow">Ajustes</p>
+        <h1>Cuenta de <em>envío</em>.</h1>
         <p>Cuenta de Outlook desde la que se envían los correos.</p>
       </header>
       <div class="card settings-card">
@@ -276,7 +291,7 @@
     </section>
   </main>
 
-  </div>
+  <footer class="app-foot">{{ app_name }} · v{{ version }}</footer>
 
   <!-- ================= CONFIRMACIÓN ================= -->
   <dialog id="confirm-dialog" aria-labelledby="confirm-title">

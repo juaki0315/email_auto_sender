@@ -19,6 +19,7 @@ AGAsesorCuotas/
 ├── mock_sender.py         # Envío SIMULADO para desarrollo y pruebas
 ├── templates/index.html
 ├── static/styles.css, app.js
+├── static/fonts/           # Newsreader (titulares), licencia SIL OFL incluida
 ├── tests/                 # pytest (validación, plantillas, clientes, duplicados, seguridad, migración)
 ├── AGAsesorCuotas.spec    # Configuración de PyInstaller (--onedir)
 ├── build.bat              # Compilación local en Windows

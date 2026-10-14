@@ -27,7 +27,7 @@ from database import ConflictError, Database, DuplicateError, backup_file
 from mailer import MailerUnavailable, SendFailed, create_mailer
 
 APP_ID = "agasesor-cuotas"
-APP_NAME = "AG Asesor — Envío de correos"
+APP_NAME = "AG Asesores — Envío de correos"
 VERSION = "1.1.0"
 DEFAULT_PORT = 8765
 # "sender" vacío: la cuenta de envío se elige en la pestaña Configuración.
