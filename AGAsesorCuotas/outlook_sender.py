@@ -13,6 +13,7 @@ log = logging.getLogger(__name__)
 
 OL_MAIL_ITEM = 0
 OL_FORMAT_PLAIN = 1
+OL_FOLDER_DRAFTS = 16
 # DISPID de MailItem.SendUsingAccount y DISPATCH_PROPERTYPUTREF: alternativa
 # conocida cuando la asignación directa no surte efecto con pywin32.
 _DISPID_SEND_USING_ACCOUNT = 64209
@@ -28,6 +29,14 @@ def _import_com():
         raise MailerUnavailable(
             "El envío con Outlook solo funciona en Windows con pywin32 instalado.")
     return pythoncom, pywintypes, win32com.client
+
+
+def _com_text(error):
+    """Descripción legible de un com_error (la que da Outlook, si la hay)."""
+    excepinfo = error.args[2] if len(error.args) > 2 else None
+    if excepinfo and len(excepinfo) > 2 and excepinfo[2]:
+        return str(excepinfo[2]).strip()
+    return str(error.args[1]) if len(error.args) > 1 else str(error)
 
 
 class OutlookMailer(BaseMailer):
@@ -95,7 +104,7 @@ class _OutlookSession:
         # Fase 1: preparar el mensaje. Cualquier fallo aquí es un error
         # confirmado: el mensaje todavía no se ha entregado a Outlook.
         try:
-            mail = self.app.CreateItem(OL_MAIL_ITEM)
+            mail = self._create_mail()
             mail.To = to
             mail.Subject = subject
             mail.BodyFormat = OL_FORMAT_PLAIN
@@ -111,9 +120,9 @@ class _OutlookSession:
                 raise SendFailed("No se pudo fijar la cuenta corporativa como remitente.")
         except SendFailed:
             raise
-        except self._com_error:
+        except self._com_error as e:
             log.exception("Error COM preparando mensaje")
-            raise SendFailed("Outlook rechazó la preparación del mensaje.")
+            raise SendFailed(f"Outlook rechazó la preparación del mensaje ({_com_text(e)}).")
 
         # Fase 2: entregar a Outlook. Si falla aquí no podemos saber con
         # certeza si el mensaje salió, así que se marca como incierto.
@@ -124,6 +133,18 @@ class _OutlookSession:
             raise SendFailed(
                 "Outlook devolvió un error al enviar. Compruebe Elementos enviados y Bandeja de salida.",
                 uncertain=True)
+
+    def _create_mail(self):
+        # En algunos perfiles Application.CreateItem falla con un error genérico
+        # (0x80004005) aunque Outlook responde; crear el mensaje en Borradores
+        # de la cuenta elegida suele funcionar y además lo asocia a esa cuenta.
+        try:
+            return self.app.CreateItem(OL_MAIL_ITEM)
+        except self._com_error as e:
+            log.warning("CreateItem falló (%s); se crea el mensaje en Borradores de %s",
+                        _com_text(e), self._expected)
+        drafts = self.account.DeliveryStore.GetDefaultFolder(OL_FOLDER_DRAFTS)
+        return drafts.Items.Add(OL_MAIL_ITEM)
 
     def _set_account(self, mail):
         try:
